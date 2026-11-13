@@ -193,8 +193,8 @@ self-evaluating-lesson-generator/
 ### 6.2. Clone & Setup Virtual Environment
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/self-evaluating-lesson-generator.git
-cd self-evaluating-lesson-generator
+git clone https://github.com/shivamgupta-1717/Lesson_Content_Generator.git
+cd Lesson_Content_Generator
 
 # Create virtual environment
 python -m venv venv
@@ -350,7 +350,7 @@ git commit -m "feat: complete self-evaluating lesson content generator with Lang
 
 # Create a new repository on GitHub: https://github.com/new (e.g. 'self-evaluating-lesson-generator')
 # Link your local repo to GitHub:
-git remote add origin https://github.com/YOUR_USERNAME/self-evaluating-lesson-generator.git
+git remote add origin https://github.com/shivamgupta-1717/Lesson_Content_Generator.git
 git branch -M main
 git push -u origin main
 ```
