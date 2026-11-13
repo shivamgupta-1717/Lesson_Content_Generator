@@ -97,7 +97,7 @@ class OpenAICompatibleProvider(BaseLLMProvider):
 class GeminiProvider(BaseLLMProvider):
     """Provider for Google Gemini API with smart multi-model free-tier fallback."""
 
-    FALLBACK_MODELS = ["gemini-3-flash-preview", "gemini-3.1-flash-lite", "gemini-2.5-flash"]
+    FALLBACK_MODELS = ["gemini-3-flash-preview", "gemini-3.1-flash-lite"]
 
     def __init__(
         self,
@@ -155,16 +155,12 @@ class GeminiProvider(BaseLLMProvider):
                     logger.warning(f"Gemini model '{candidate_model}' not found; trying next model...")
                     continue
                 else:
-                    logger.error(f"Gemini model '{candidate_model}' unexpected failure: {exc}")
+                    logger.error(f"Gemini model '{candidate_model}' error: {exc}. Trying next candidate...")
                     continue
 
-        # If all live models fail due to quota, fall back gracefully to deterministic generator
-        logger.warning(
-            f"All live Gemini free-tier candidate models exhausted their daily quota ({last_error}). "
-            "Falling back to Deterministic Provider to ensure workflow completion."
+        raise RuntimeError(
+            f"All Gemini candidate models ({models_to_try}) failed. Last error: {last_error}"
         )
-        mock = DeterministicMockLLMProvider()
-        return mock.generate_text(prompt=prompt, system_prompt=system_prompt)
 
     def generate_structured(
         self,
@@ -175,18 +171,34 @@ class GeminiProvider(BaseLLMProvider):
         schema = response_model.model_json_schema()
         instruction = (
             f"{system_prompt or ''}\n\n"
-            f"You MUST respond ONLY with valid JSON conforming to this schema:\n{json.dumps(schema, indent=2)}"
+            f"You MUST respond ONLY with valid JSON conforming to this schema:\n{json.dumps(schema, indent=2)}\n"
+            "Do NOT include markdown formatting or extra text outside the JSON."
         )
-        try:
-            raw_text = self.generate_text(prompt=prompt, system_prompt=instruction)
-            return _extract_and_validate_json(raw_text, response_model)
-        except Exception as exc:
-            logger.warning(
-                f"Failed to generate structured JSON with Gemini: {exc}. "
-                "Engaging Deterministic Mock fallback for schema compliance."
-            )
-            mock = DeterministicMockLLMProvider()
-            return mock.generate_structured(prompt=prompt, response_model=response_model, system_prompt=system_prompt)
+
+        models_to_try = [self.model_name] + [m for m in self.FALLBACK_MODELS if m != self.model_name]
+        last_error = None
+
+        for candidate_model in models_to_try:
+            try:
+                active_client = self._genai.GenerativeModel(
+                    model_name=candidate_model,
+                    generation_config={"temperature": self.temperature},
+                )
+                logger.info(f"GeminiProvider.generate_structured: Calling '{candidate_model}'...")
+                full_prompt = f"{instruction}\n\n{prompt}"
+                response = active_client.generate_content(full_prompt)
+                if response and response.text:
+                    self.model_name = candidate_model
+                    self.client = active_client
+                    return _extract_and_validate_json(response.text.strip(), response_model)
+            except Exception as exc:
+                last_error = exc
+                logger.warning(f"GeminiProvider model '{candidate_model}' structured generation failed: {exc}")
+                continue
+
+        raise RuntimeError(
+            f"Gemini API could not generate structured output for {response_model.__name__} after attempting models {models_to_try}: {last_error}"
+        )
 
 
 class DeterministicMockLLMProvider(BaseLLMProvider):
@@ -227,6 +239,13 @@ class DeterministicMockLLMProvider(BaseLLMProvider):
 
     def _build_mock_lesson(self, prompt: str) -> Any:
         from evaluation.schemas import LessonContent
+
+        # Check if topic is React vs RAG vs Generic
+        prompt_lower = prompt.lower()
+        if "react" in prompt_lower:
+            return self._build_mock_react_lesson(prompt)
+        elif not ("rag" in prompt_lower or "retrieval" in prompt_lower):
+            return self._build_mock_generic_lesson(prompt)
 
         # Check if deliberate error was injected or if this is a feedback regeneration
         is_flawed_embeddings = self.deliberate_error_mode == "flawed_embeddings"
@@ -407,6 +426,12 @@ class DeterministicMockLLMProvider(BaseLLMProvider):
     def _build_mock_evaluation(self, prompt: str) -> Any:
         from evaluation.schemas import CheckpointResult, EvaluationReport, EvaluationStatus, RubricDimension
 
+        prompt_lower = prompt.lower()
+        if "react" in prompt_lower:
+            return self._build_mock_react_evaluation(prompt)
+        elif not ("rag" in prompt_lower or "retrieval" in prompt_lower):
+            return self._build_mock_generic_evaluation(prompt)
+
         is_flawed_embeddings = self.deliberate_error_mode == "flawed_embeddings"
         is_missing_vector_db = self.deliberate_error_mode == "missing_vector_db"
         is_jargon_overload = self.deliberate_error_mode == "jargon_overload"
@@ -568,6 +593,481 @@ class DeterministicMockLLMProvider(BaseLLMProvider):
             dimension_scores=dimension_scores,
             checkpoints=checkpoints,
             summary_verdict=verdict,
+        )
+
+    def _build_mock_react_lesson(self, prompt: str) -> Any:
+        from evaluation.schemas import LessonContent
+
+        is_flawed_workflow = self.deliberate_error_mode == "flawed_workflow"
+        has_feedback = "CRITICAL: The previous lesson failed" in prompt or "Revise the lesson" in prompt
+
+        workflow_text = (
+            "Here is the simple step-by-step workflow of how React works in a website:\n\n"
+            "1. **Component Written:** The developer writes a component (for example, a 'Like' button or a food item card).\n"
+            "2. **User Clicks:** A user taps the '+ Add' button on the screen.\n"
+            "3. **State Updates:** React updates the button's internal State (likeCount = likeCount + 1).\n"
+            "4. **Virtual DOM Compares:** React calculates the difference on its quick memory scratchpad.\n"
+            "5. **Precise Screen Update:** The browser updates only that single heart icon and count without reloading the page!"
+        )
+        if is_flawed_workflow and not has_feedback:
+            workflow_text = "Step 1: The website reloads the entire page. Step 2: Everything blinks white. Step 3: Done."
+
+        return LessonContent(
+            topic="Introduction to React",
+            target_audience="12th-grade graduate from India with limited English vocabulary and no prior programming knowledge",
+            title="Understanding React: Building Modern Websites Like LEGO Blocks",
+            learning_objectives=[
+                "Understand why traditional websites feel slow and need constant full-page refreshes.",
+                "Learn what React is and how it builds user interfaces using reusable LEGO-like blocks called Components.",
+                "Discover how JSX lets us combine HTML design tags with JavaScript logic easily.",
+                "Understand State and Props: how components remember changing scores and receive instructions.",
+                "See how the Virtual DOM updates only the changed parts of a screen, like a cricket scoreboard."
+            ],
+            introduction=(
+                "Have you ever noticed that when you order food on Swiggy or Zomato, as soon as you tap the '+' button "
+                "to add an extra butter naan, the total bill and cart item count change instantly without the entire web page "
+                "reloading or blinking white? "
+                "Traditional websites built years ago had to reload the whole screen for every single click. "
+                "Today, we will learn about **React**—a widely used technology created by Facebook that makes modern websites "
+                "feel as fast and smooth as mobile apps."
+            ),
+            what_is_rag=(
+                "React is a free, popular JavaScript library used for building user interfaces (UI)—the visual screens, "
+                "buttons, and navigation bars that you interact with on a website.\n\n"
+                "Instead of creating a giant, complicated 1,000-line webpage, React lets developers break the screen into "
+                "small, independent, reusable building blocks called **Components** (just like building a house out of LEGO blocks)."
+            ),
+            why_is_rag_needed=(
+                "Why do we need React? Imagine a giant electronic cricket scoreboard at the Wankhede Stadium. "
+                "Every time Virat Kohli runs a single, only the 'Runs' number needs to flip from 81 to 82! "
+                "You should not have to shut down the stadium, turn off the stadium lights, and rebuild the entire iron scoreboard "
+                "just to update one single number!\n\n"
+                "Without React, traditional web browsers did something very similar: they refreshed and redrew the entire webpage "
+                "whenever data changed. React fixes this by updating ONLY the specific piece of the screen that changed."
+            ),
+            how_rag_works=(
+                "React works like a smart construction manager with a fast blueprint notebook. "
+                "When data changes (such as a customer adding an item to their online cart), React draws a quick draft in the computer's "
+                "memory called the **Virtual DOM**. It compares the new draft with the old draft, identifies the exact single line that changed, "
+                "and tells the browser: 'Do not touch the rest of the page; only redraw this single price number.' "
+                "This makes web pages feel instantaneous."
+            ),
+            retrieval_process=(
+                "**Components (The LEGO Blocks of the Web):**\n"
+                "A Component is a self-contained, reusable piece of code that controls one part of the screen. "
+                "For example, on YouTube, every video thumbnail card is a component. A developer writes the card component once, "
+                "and React reuses that same component 50 times to display 50 different videos on the homepage."
+            ),
+            embedding_explanation=(
+                "**JSX (Writing HTML Tags Inside JavaScript):**\n"
+                "In traditional web development, your layout design (HTML) and your programming logic (JavaScript) lived in completely separate files. "
+                "React introduced **JSX**, which allows developers to write familiar HTML tags directly inside their JavaScript functions. "
+                "For example, you can write `<h1>Welcome, Rahul!</h1>` directly inside your program, making code much easier to read."
+            ),
+            vector_database_explanation=(
+                "**State and Props (Memory and Instructions):**\n"
+                "Every React component can hold data in two ways:\n"
+                "1. **State:** Think of State as the component's personal memory notebook. For example, a counter button uses State to remember how many times it was clicked.\n"
+                "2. **Props:** Short for 'Properties'. Props are inputs passed down from a parent component to a child component, like a father giving pocket money and instructions to his child."
+            ),
+            context_injection=(
+                "**The Virtual DOM (The Fast Memory Scratchpad):**\n"
+                "The real webpage in your browser (called the real DOM) is heavy and slow to change, like carving words into stone. "
+                "React keeps a lightweight virtual copy in computer RAM. "
+                "Whenever your data changes, React does all its calculations on this fast scratchpad in less than 5 milliseconds, "
+                "and only paints the exact difference onto the real browser screen."
+            ),
+            generation_process=(
+                "**React Hooks (Helpful Built-in Superpowers):**\n"
+                "Hooks are special built-in functions in React (such as `useState` and `useEffect`) that give simple components superpowers. "
+                "For example, `useState` allows a component to remember data between clicks, while `useEffect` allows a component to fetch data from the internet when the page first opens."
+            ),
+            real_life_example=(
+                "**The Swiggy Cart Counter in India:**\n"
+                "Let us look at an everyday Indian example: Ordering Biryani on Swiggy.\n"
+                "The Swiggy food page has several React components:\n"
+                "- The Header search bar\n"
+                "- The Restaurant banner\n"
+                "- The Menu item cards with '+ Add' buttons\n"
+                "- The floating green 'View Cart' bar at the bottom\n\n"
+                "When you tap '+ Add' on Chicken Biryani, only the '+ Add' button changes to '1', and the green Cart bar at the bottom slides up showing Rs. 280. "
+                "The restaurant photos do not reload, the header does not blink, and your scroll position does not reset. "
+                "That smooth, seamless experience is 100% powered by React!"
+            ),
+            step_by_step_workflow=workflow_text,
+            simple_practical_analogy=(
+                "**The Indian Railway Reservation Chart Analogy:**\n"
+                "Imagine you are checking the reservation chart at New Delhi railway station for the Rajdhani Express. "
+                "If Passenger Sharma moves from RAC to a confirmed Berth B1-22, the station master does not print a brand-new 50-page chart and paste it on the wall. "
+                "He simply crosses out the RAC note on Sharma's row and writes 'Confirmed'. "
+                "React does the exact same thing: it only edits the changed line, leaving the rest of the wall untouched!"
+            ),
+            key_terminology={
+                "React": "A popular JavaScript library used to build fast, interactive user interfaces for websites and web applications.",
+                "Component": "A reusable building block of a website screen, like an individual LEGO brick.",
+                "JSX": "A syntax extension that allows developers to write HTML-like tags directly inside JavaScript code.",
+                "State": "A component's internal memory that stores information that can change over time (like a click count or cart total).",
+                "Props": "Short for properties; data and instructions passed from a parent component down to a child component.",
+                "Virtual DOM": "A lightweight digital copy of the webpage kept in computer memory to calculate only what changed before updating the real screen.",
+                "Hooks": "Special helper functions (like useState) that give React components memory and lifecycle capabilities."
+            },
+            advantages_and_limitations=(
+                "**Advantages of React:**\n"
+                "1. **Blazing Fast Performance:** Virtual DOM prevents slow full-page browser reloads.\n"
+                "2. **Reusable Code:** Components can be written once and reused across hundreds of pages.\n"
+                "3. **Huge Career Demand:** Thousands of top companies in India and globally (Swiggy, Flipkart, Meta, Netflix) hire React developers.\n\n"
+                "**Limitations of React:**\n"
+                "1. **Steep Initial Learning Curve:** Beginners must learn JavaScript fundamentals and JSX syntax.\n"
+                "2. **Fast-Paced Ecosystem:** Libraries and best practices evolve quickly, requiring continuous learning."
+            ),
+            summary=(
+                "To summarize what we learned about React today:\n"
+                "- Traditional websites forced full-page reloads for every small change.\n"
+                "- React breaks screens into reusable Components (like LEGO bricks).\n"
+                "- **State** remembers changing data; **Props** pass data down from parent to child.\n"
+                "- The **Virtual DOM** compares screen blueprints in memory and updates only the changed parts, like a cricket scoreboard.\n"
+                "- Used in popular everyday Indian apps like Swiggy, Zomato, and Flipkart."
+            ),
+            knowledge_check_questions=[
+                {
+                    "question": "What is a Component in React?",
+                    "answer": "A reusable, independent building block of a website user interface, like a LEGO brick.",
+                    "explanation": "Components allow developers to write UI code once and reuse it across multiple screens."
+                },
+                {
+                    "question": "Why is a cricket scoreboard a good analogy for the Virtual DOM?",
+                    "answer": "Because only the changed score digit is updated, rather than demolishing and rebuilding the entire scoreboard structure.",
+                    "explanation": "Virtual DOM calculates the exact difference and updates only the changed element in the browser."
+                },
+                {
+                    "question": "What is the difference between State and Props?",
+                    "answer": "State is a component's internal changing memory, whereas Props are read-only properties passed down from a parent.",
+                    "explanation": "State holds data that can change on user interaction (like cart items); Props pass configuration from parent to child."
+                },
+                {
+                    "question": "What does JSX stand for and what does it do?",
+                    "answer": "JavaScript XML; it lets developers write HTML-like tags directly inside JavaScript functions.",
+                    "explanation": "JSX makes user interface code intuitive and concise within JavaScript."
+                }
+            ]
+        )
+
+    def _build_mock_react_evaluation(self, prompt: str) -> Any:
+        from evaluation.schemas import CheckpointResult, EvaluationReport, EvaluationStatus, RubricDimension
+
+        checkpoints = [
+            CheckpointResult(
+                checkpoint_id="CHK_ACC_01",
+                checkpoint_name="Factual Accuracy of Core Concepts",
+                dimension=RubricDimension.ACCURACY_AND_GROUNDING,
+                is_mandatory=True,
+                status=EvaluationStatus.PASS,
+                reason="Core React concepts (Components, JSX, State & Props, Virtual DOM, Hooks) are explained factually without misconceptions.",
+                evidence="React divides the screen into small, independent, reusable building blocks called Components...",
+                suggested_improvement=""
+            ),
+            CheckpointResult(
+                checkpoint_id="CHK_ACC_02",
+                checkpoint_name="No Hallucinated Claims or Citations",
+                dimension=RubricDimension.ACCURACY_AND_GROUNDING,
+                is_mandatory=True,
+                status=EvaluationStatus.PASS,
+                reason="No fabricated statistics, fake benchmark figures, or false historical citations are present.",
+                evidence="Lesson relies on sound architectural principles rather than ungrounded statistics.",
+                suggested_improvement=""
+            ),
+            CheckpointResult(
+                checkpoint_id="CHK_LANG_01",
+                checkpoint_name="Appropriate Vocabulary for 12th Grade Beginner",
+                dimension=RubricDimension.BEGINNER_FRIENDLY_LANGUAGE,
+                is_mandatory=True,
+                status=EvaluationStatus.PASS,
+                reason="Vocabulary is accessible to a non-English-medium 12th-grade Indian student. Sentences are short and clear.",
+                evidence="Have you ever noticed that when you order food on Swiggy... Think of it like building a house out of LEGO blocks...",
+                suggested_improvement=""
+            ),
+            CheckpointResult(
+                checkpoint_id="CHK_EX_01",
+                checkpoint_name="Relatable Everyday Examples",
+                dimension=RubricDimension.TEACHING_THROUGH_EXAMPLES,
+                is_mandatory=True,
+                status=EvaluationStatus.PASS,
+                reason="Features relatable Indian everyday examples: Swiggy food ordering cart and Eden Gardens / Wankhede cricket scoreboard.",
+                evidence="When you tap '+ Add' on Chicken Biryani, only the '+ Add' button changes to '1'...",
+                suggested_improvement=""
+            ),
+            CheckpointResult(
+                checkpoint_id="CHK_JARG_01",
+                checkpoint_name="Immediate Technical Term Explanation",
+                dimension=RubricDimension.CLARITY_AND_JARGON,
+                is_mandatory=True,
+                status=EvaluationStatus.PASS,
+                reason="Technical words like Component, JSX, State, Props, Virtual DOM, and Hooks are explained immediately upon first mention.",
+                evidence="Key Terminology table clearly maps technical words to simple everyday meanings.",
+                suggested_improvement=""
+            ),
+            CheckpointResult(
+                checkpoint_id="CHK_COV_01",
+                checkpoint_name="Complete Topic Coverage & Mandatory Sections",
+                dimension=RubricDimension.TOPIC_COVERAGE,
+                is_mandatory=True,
+                status=EvaluationStatus.PASS,
+                reason="All 18 required syllabus components are present and specifically address React.",
+                evidence="Lesson includes objectives, intro, components, JSX, state/props, Virtual DOM, workflow, analogy, glossary, and knowledge check.",
+                suggested_improvement=""
+            ),
+            CheckpointResult(
+                checkpoint_id="CHK_FLOW_01",
+                checkpoint_name="Logical Pedagogical Progression",
+                dimension=RubricDimension.TEACHING_FLOW,
+                is_mandatory=True,
+                status=EvaluationStatus.PASS,
+                reason="Structure transitions intuitively from everyday web problems (slow page reloads) to LEGO block components, JSX, Virtual DOM, and self-checks.",
+                evidence="Problem setup -> Definition -> Components -> Analogy -> Step-by-Step -> Quiz.",
+                suggested_improvement=""
+            ),
+        ]
+
+        failed_list = [c for c in checkpoints if c.status == EvaluationStatus.FAIL]
+        is_passed = len(failed_list) == 0
+
+        dimension_scores = {}
+        for c in checkpoints:
+            dimension_scores[c.dimension.value] = "PASS" if c.status == EvaluationStatus.PASS else "FAIL"
+
+        return EvaluationReport(
+            attempt_number=1,
+            is_passed=is_passed,
+            total_checkpoints=len(checkpoints),
+            passed_checkpoints=len(checkpoints),
+            failed_checkpoints=0,
+            dimension_scores=dimension_scores,
+            checkpoints=checkpoints,
+            summary_verdict="All mandatory checkpoints passed. The lesson teaches React cleanly, accurately, and with relatable Indian examples.",
+        )
+
+    def _extract_topic_from_prompt(self, prompt: str) -> str:
+        """Extracts the user's requested topic name from the prompt text."""
+        match = re.search(r'Educational Topic to Teach:\s*"(.*?)"', prompt, re.IGNORECASE)
+        if match:
+            return match.group(1).strip()
+        match = re.search(r'topic:\s*(?:Introduction to\s+)?([^\n,\'"]+)', prompt, re.IGNORECASE)
+        if match:
+            return match.group(1).strip()
+        return "the Chosen Topic"
+
+    def _build_mock_generic_lesson(self, prompt: str) -> Any:
+        from evaluation.schemas import LessonContent
+
+        topic_name = self._extract_topic_from_prompt(prompt)
+
+        return LessonContent(
+            topic=topic_name,
+            target_audience="A 12th-grade graduate from India with limited English vocabulary and no prior technical knowledge",
+            title=f"A Simple Beginner's Guide to {topic_name}",
+            learning_objectives=[
+                f"Understand what {topic_name} is in simple, everyday language.",
+                f"Learn why {topic_name} is used and what problem it solves.",
+                f"Discover the core pillars and working steps of {topic_name}.",
+                f"Explore a relatable real-life Indian analogy to visualize {topic_name}.",
+                f"Review key terminology and test your understanding with simple questions."
+            ],
+            introduction=(
+                f"Welcome! Have you ever wondered how {topic_name} works in real life? "
+                "Many people think technical topics are difficult because books use heavy, complicated English words. "
+                f"In this lesson, we will break down **{topic_name}** using simple words, short sentences, and everyday Indian examples "
+                "so that anyone can easily understand it from scratch."
+            ),
+            what_is_rag=(
+                f"**What is {topic_name}?**\n\n"
+                f"At its core, {topic_name} is a set of rules and tools designed to solve a specific everyday challenge. "
+                "Instead of doing everything manually by hand or repeating the same mistakes, it gives us a organized system "
+                "to handle tasks step-by-step with high speed and accuracy."
+            ),
+            why_is_rag_needed=(
+                f"**Why is {topic_name} Needed?**\n\n"
+                "Imagine trying to manage a busy Indian railway station ticket counter during Diwali rush with only a pencil and paper! "
+                "Lines would stretch for kilometers, people would get tired, and mistakes would happen constantly.\n\n"
+                f"{topic_name} was created to replace slow, error-prone manual methods with a clean, dependable, and automated approach."
+            ),
+            how_rag_works=(
+                f"**How {topic_name} Works (High-Level Overview):**\n\n"
+                "It operates like a well-organized team:\n"
+                "1. **Input:** It receives your instructions or data.\n"
+                "2. **Processing:** It breaks the task into manageable components and applies clear rules.\n"
+                "3. **Output:** It presents the finished result cleanly and quickly."
+            ),
+            retrieval_process=(
+                f"**Core Pillar 1 of {topic_name} (Collection & Input):**\n"
+                "The system gathers the required information from reliable sources, checking that everything needed is present before starting."
+            ),
+            embedding_explanation=(
+                f"**Core Pillar 2 of {topic_name} (Organization & Translation):**\n"
+                "It translates raw input into a structured format that computers or learners can understand effortlessly."
+            ),
+            vector_database_explanation=(
+                f"**Core Pillar 3 of {topic_name} (Structured Storage):**\n"
+                "Information is stored neatly in memory so that any required detail can be found in milliseconds without searching through everything."
+            ),
+            context_injection=(
+                f"**Core Pillar 4 of {topic_name} (Coordination & Assembly):**\n"
+                "Different parts work together like gears in a bicycle, ensuring no single component has to carry all the burden alone."
+            ),
+            generation_process=(
+                f"**Core Pillar 5 of {topic_name} (Final Execution & Delivery):**\n"
+                "The final result is verified, polished, and delivered to the user in a smooth, user-friendly format."
+            ),
+            real_life_example=(
+                "**Relatable Everyday Example:**\n\n"
+                "Think of a busy local chai tapri (tea stall) near an Indian railway station during morning office hours. "
+                "The chai stall owner has a clear, organized workflow: one helper takes orders, one boils the fresh milk and crushed ginger, "
+                "and one pours the steaming hot chai into glasses and collects UPI payments. "
+                f"Because every role is defined and organized, 200 customers get fresh tea in minutes without chaos. {topic_name} works on the exact same principles of clean organization and teamwork!"
+            ),
+            step_by_step_workflow=(
+                f"Here is the simple step-by-step workflow of {topic_name}:\n\n"
+                "1. **Step 1 (Trigger):** A request is initiated by the user.\n"
+                "2. **Step 2 (Verification):** The system checks the request requirements.\n"
+                "3. **Step 3 (Execution):** The core process runs following tested standard procedures.\n"
+                "4. **Step 4 (Validation):** The output is reviewed to ensure there are no errors.\n"
+                "5. **Step 5 (Delivery):** The final completed output is delivered cleanly."
+            ),
+            simple_practical_analogy=(
+                f"**The Recipe Book Analogy for {topic_name}:**\n\n"
+                "Cooking a delicious biryani without a recipe can lead to too much salt or raw rice. "
+                "Following a trusted step-by-step family recipe guarantees that every single time you cook, the dish turns out aromatic and delicious. "
+                f"{topic_name} is like that trusted recipe book: it gives you reliable, tested steps for great results every time."
+            ),
+            key_terminology={
+                "Input": "The initial data or question provided by the user.",
+                "Process": "The structured series of actions taken to achieve a goal.",
+                "Component": "An individual, reusable building block of the system.",
+                "Validation": "Double-checking work to ensure correctness and quality.",
+                "Output": "The final finished result presented to the user."
+            },
+            advantages_and_limitations=(
+                f"**Advantages of {topic_name}:**\n"
+                "1. **High Efficiency:** Completes tasks much faster than traditional manual methods.\n"
+                "2. **Consistency:** Produces uniform, high-quality results every single time.\n"
+                "3. **Beginner-Friendly:** Easy to learn and adopt once the core pillars are understood.\n\n"
+                f"**Limitations of {topic_name}:**\n"
+                "1. **Setup Effort:** Requires initial planning and understanding of the basic concepts.\n"
+                "2. **Input Dependent:** If the initial input is incomplete or flawed, the final output will reflect those mistakes ('Garbage In, Garbage Out')."
+            ),
+            summary=(
+                f"**Key Takeaways for {topic_name}:**\n"
+                f"- {topic_name} is a practical, structured framework designed to simplify complex work.\n"
+                "- It replaces slow manual guessing with clear, organized steps.\n"
+                "- Like the organized chai stall or trusted family recipe, it guarantees speed, accuracy, and reliability."
+            ),
+            knowledge_check_questions=[
+                {
+                    "question": f"What is the primary purpose of {topic_name}?",
+                    "answer": "To provide an organized, reliable system that replaces slow manual methods with structured efficiency.",
+                    "explanation": f"{topic_name} focuses on clarity, speed, and accuracy."
+                },
+                {
+                    "question": f"Why is good input important in {topic_name}?",
+                    "answer": "Because the final output depends on the quality of the starting information (Garbage In, Garbage Out).",
+                    "explanation": "High quality input ensures high quality output."
+                },
+                {
+                    "question": f"What does the Chai Stall analogy demonstrate about {topic_name}?",
+                    "answer": "It shows how dividing work into clear, coordinated steps makes a busy system run smoothly without mistakes.",
+                    "explanation": "Organization and teamwork make systems scalable."
+                }
+            ]
+        )
+
+    def _build_mock_generic_evaluation(self, prompt: str) -> Any:
+        from evaluation.schemas import CheckpointResult, EvaluationReport, EvaluationStatus, RubricDimension
+
+        topic_name = self._extract_topic_from_prompt(prompt)
+
+        checkpoints = [
+            CheckpointResult(
+                checkpoint_id="CHK_ACC_01",
+                checkpoint_name="Factual Accuracy of Core Concepts",
+                dimension=RubricDimension.ACCURACY_AND_GROUNDING,
+                is_mandatory=True,
+                status=EvaluationStatus.PASS,
+                reason=f"Core concepts for {topic_name} are explained accurately and factually.",
+                evidence=f"{topic_name} definition and pillars are sound and grounded.",
+                suggested_improvement=""
+            ),
+            CheckpointResult(
+                checkpoint_id="CHK_ACC_02",
+                checkpoint_name="No Hallucinated Claims or Citations",
+                dimension=RubricDimension.ACCURACY_AND_GROUNDING,
+                is_mandatory=True,
+                status=EvaluationStatus.PASS,
+                reason="No fabricated statistics, fake citations, or unsupported claims are present.",
+                evidence="Lesson relies on sound pedagogical fundamentals.",
+                suggested_improvement=""
+            ),
+            CheckpointResult(
+                checkpoint_id="CHK_LANG_01",
+                checkpoint_name="Appropriate Vocabulary for 12th Grade Beginner",
+                dimension=RubricDimension.BEGINNER_FRIENDLY_LANGUAGE,
+                is_mandatory=True,
+                status=EvaluationStatus.PASS,
+                reason="Vocabulary is accessible, with short sentences and plain English definitions.",
+                evidence="Uses simple everyday conversational words.",
+                suggested_improvement=""
+            ),
+            CheckpointResult(
+                checkpoint_id="CHK_EX_01",
+                checkpoint_name="Relatable Everyday Examples",
+                dimension=RubricDimension.TEACHING_THROUGH_EXAMPLES,
+                is_mandatory=True,
+                status=EvaluationStatus.PASS,
+                reason="Features relatable Indian everyday example and intuitive analogies.",
+                evidence="Chai stall and recipe book analogies.",
+                suggested_improvement=""
+            ),
+            CheckpointResult(
+                checkpoint_id="CHK_JARG_01",
+                checkpoint_name="Immediate Technical Term Explanation",
+                dimension=RubricDimension.CLARITY_AND_JARGON,
+                is_mandatory=True,
+                status=EvaluationStatus.PASS,
+                reason="Technical terms are immediately explained in plain English and listed in the glossary.",
+                evidence="Key Terminology section contains clear mappings.",
+                suggested_improvement=""
+            ),
+            CheckpointResult(
+                checkpoint_id="CHK_COV_01",
+                checkpoint_name="Complete Topic Coverage & Mandatory Sections",
+                dimension=RubricDimension.TOPIC_COVERAGE,
+                is_mandatory=True,
+                status=EvaluationStatus.PASS,
+                reason=f"All 18 required pedagogical sections are present and dedicated to {topic_name}.",
+                evidence=f"Lesson covers title, objectives, intro, pillars, workflow, quiz for {topic_name}.",
+                suggested_improvement=""
+            ),
+            CheckpointResult(
+                checkpoint_id="CHK_FLOW_01",
+                checkpoint_name="Logical Pedagogical Progression",
+                dimension=RubricDimension.TEACHING_FLOW,
+                is_mandatory=True,
+                status=EvaluationStatus.PASS,
+                reason="Logical sequence from intro to definition, pillars, workflow, and quiz.",
+                evidence="Progressive pedagogical sequence.",
+                suggested_improvement=""
+            )
+        ]
+
+        dimension_scores = {c.dimension.value: "PASS" for c in checkpoints}
+
+        return EvaluationReport(
+            attempt_number=1,
+            is_passed=True,
+            total_checkpoints=len(checkpoints),
+            passed_checkpoints=len(checkpoints),
+            failed_checkpoints=0,
+            dimension_scores=dimension_scores,
+            checkpoints=checkpoints,
+            summary_verdict=f"All mandatory checkpoints passed. The lesson teaches {topic_name} cleanly and accurately.",
         )
 
 

@@ -73,16 +73,43 @@ class LessonContent(BaseModel):
             md_lines.append(f"- {obj}")
         md_lines.append("\n---\n")
 
+        topic_clean = self.topic.strip()
+        is_rag = "rag" in topic_clean.lower() or "retrieval" in topic_clean.lower()
+        is_react = "react" in topic_clean.lower()
+
+        sec_3 = f"3. What is {topic_clean}?" if not is_rag else "3. What is RAG (Retrieval-Augmented Generation)?"
+        sec_4 = f"4. Why is {topic_clean} Needed?" if not is_rag else "4. Why is RAG Needed?"
+        sec_5 = f"5. How {topic_clean} Works (High-Level Overview)" if not is_rag else "5. How RAG Works (High-Level Overview)"
+
+        if is_react:
+            sec_6 = "6. Components (Reusable LEGO UI Bricks)"
+            sec_7 = "7. JSX (Writing HTML Tags Inside JavaScript)"
+            sec_8 = "8. State and Props (Memory and Instructions)"
+            sec_9 = "9. The Virtual DOM (The Fast Memory Scratchpad)"
+            sec_10 = "10. Component Lifecycle & Hooks"
+        elif is_rag:
+            sec_6 = "6. The Retrieval Process (Finding Information)"
+            sec_7 = "7. Embeddings Explained Simply"
+            sec_8 = "8. Vector Databases (The Smart Library)"
+            sec_9 = "9. Context Injection (Passing Clues to the AI)"
+            sec_10 = "10. The Generation Process (Crafting the Answer)"
+        else:
+            sec_6 = f"6. Core Pillar 1 of {topic_clean}"
+            sec_7 = f"7. Core Pillar 2 of {topic_clean}"
+            sec_8 = f"8. Core Pillar 3 of {topic_clean}"
+            sec_9 = f"9. Core Pillar 4 of {topic_clean}"
+            sec_10 = f"10. Core Pillar 5 of {topic_clean}"
+
         sections = [
             ("2. Introduction", self.introduction),
-            ("3. What is RAG (Retrieval-Augmented Generation)?", self.what_is_rag),
-            ("4. Why is RAG Needed?", self.why_is_rag_needed),
-            ("5. How RAG Works (High-Level Overview)", self.how_rag_works),
-            ("6. The Retrieval Process (Finding Information)", self.retrieval_process),
-            ("7. Embeddings Explained Simply", self.embedding_explanation),
-            ("8. Vector Databases (The Smart Library)", self.vector_database_explanation),
-            ("9. Context Injection (Passing Clues to the AI)", self.context_injection),
-            ("10. The Generation Process (Crafting the Answer)", self.generation_process),
+            (sec_3, self.what_is_rag),
+            (sec_4, self.why_is_rag_needed),
+            (sec_5, self.how_rag_works),
+            (sec_6, self.retrieval_process),
+            (sec_7, self.embedding_explanation),
+            (sec_8, self.vector_database_explanation),
+            (sec_9, self.context_injection),
+            (sec_10, self.generation_process),
             ("11. Real-Life Indian Everyday Example", self.real_life_example),
             ("12. Step-by-Step Workflow", self.step_by_step_workflow),
             ("13. Simple Practical Analogy", self.simple_practical_analogy),

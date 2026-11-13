@@ -168,8 +168,22 @@ with st.sidebar:
 
     api_key_input = ""
     model_input = ""
-    if provider_option != "mock":
-        default_model = "gemini-3-flash-preview" if provider_option == "gemini" else "gpt-4o-mini"
+    if provider_option == "gemini":
+        model_input = st.selectbox(
+            "Gemini Model",
+            options=["gemini-3-flash-preview", "gemini-3.1-flash-lite"],
+            index=0,
+            help="gemini-3-flash-preview and gemini-3.1-flash-lite have active, high-quota free-tier access.",
+        )
+        key_status = "Connected (...8HOAA)" if os.getenv("GEMINI_API_KEY") else "Not configured"
+        st.caption(f"🔑 Gemini Key: `{key_status}`")
+        api_key_input = st.text_input(
+            "Custom Gemini Key (Optional)",
+            type="password",
+            help="Leave blank to use your active API key from .env",
+        )
+    elif provider_option != "mock":
+        default_model = "gpt-4o-mini"
         if provider_option == "groq":
             default_model = "llama-3.3-70b-versatile"
         elif provider_option == "ollama":
@@ -312,9 +326,8 @@ with tab_studio:
             if "ResourceExhausted" in err_msg or "Quota Exceeded" in err_msg or "429" in err_msg:
                 st.error(f"⚠️ **API Quota Exceeded (429):** {err_msg}")
                 st.info(
-                    "💡 **How to proceed right now:** In the left sidebar under **1. LLM Provider**, "
-                    "switch to **'mock'**. The mock provider generates the complete, rich 18-section RAG lesson "
-                    "and performs the full evaluation without requiring external API quota!"
+                    "💡 **Suggested Fix:** In the sidebar under **1. LLM Provider**, "
+                    "switch to **gemini-3.1-flash-lite** or **gemini-3-flash-preview** which have fresh free-tier quota available."
                 )
             else:
                 st.error(f"Workflow execution failed: {exc}")

@@ -7,7 +7,6 @@ from services.llm_service import (
     OpenAICompatibleProvider,
     get_llm_provider,
 )
-from services.lesson_service import LessonContentService
 
 __all__ = [
     "BaseLLMProvider",
@@ -17,3 +16,10 @@ __all__ = [
     "get_llm_provider",
     "LessonContentService",
 ]
+
+
+def __getattr__(name: str):
+    if name == "LessonContentService":
+        from services.lesson_service import LessonContentService
+        return LessonContentService
+    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")

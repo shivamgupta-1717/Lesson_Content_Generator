@@ -27,7 +27,7 @@ class LessonEvaluatorAgent:
     def evaluate(
         self,
         lesson: LessonContent,
-        target_audience: str,
+        target_audience: Optional[str] = None,
         attempt_number: int = 1,
     ) -> EvaluationReport:
         """Audits the lesson and produces an EvaluationReport.
@@ -40,9 +40,10 @@ class LessonEvaluatorAgent:
         Returns:
             EvaluationReport: Comprehensive strict pass/fail audit.
         """
+        audience = target_audience or lesson.target_audience or "12th-grade graduate from India"
         logger.info(
             f"LessonEvaluatorAgent: Starting evaluation for attempt #{attempt_number} "
-            f"of lesson '{lesson.title}'"
+            f"of lesson '{lesson.title}' (Topic='{lesson.topic}')"
         )
 
         # 1. Run deterministic checks first (section completeness, jargon scan, glossary check)
@@ -55,7 +56,11 @@ class LessonEvaluatorAgent:
 
         # 2. Run LLM semantic evaluation for conceptual accuracy, grounding, analogies, and tone
         lesson_md = lesson.to_markdown()
-        prompt = build_evaluator_prompt(lesson_markdown=lesson_md, target_audience=target_audience)
+        prompt = build_evaluator_prompt(
+            lesson_markdown=lesson_md,
+            target_audience=audience,
+            topic=lesson.topic,
+        )
 
         semantic_report = self.llm_provider.generate_structured(
             prompt=prompt,
