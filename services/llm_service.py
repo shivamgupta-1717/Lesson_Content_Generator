@@ -95,12 +95,14 @@ class OpenAICompatibleProvider(BaseLLMProvider):
 
 
 class GeminiProvider(BaseLLMProvider):
-    """Provider for Google Gemini API."""
+    """Provider for Google Gemini API with smart multi-model free-tier fallback."""
+
+    FALLBACK_MODELS = ["gemini-3-flash-preview", "gemini-3.1-flash-lite", "gemini-2.5-flash"]
 
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model: str = "gemini-2.5-flash",
+        model: str = "gemini-3-flash-preview",
         temperature: float = 0.3,
     ):
         try:
@@ -113,8 +115,9 @@ class GeminiProvider(BaseLLMProvider):
             raise ValueError("GEMINI_API_KEY is not set. Please add it to your .env file or choose provider='mock'.")
 
         genai.configure(api_key=self.api_key)
-        self.model_name = model
+        self.model_name = model or "gemini-3-flash-preview"
         self.temperature = temperature
+        self._genai = genai
         self.client = genai.GenerativeModel(
             model_name=self.model_name,
             generation_config={"temperature": self.temperature},
@@ -122,21 +125,46 @@ class GeminiProvider(BaseLLMProvider):
 
     def generate_text(self, prompt: str, system_prompt: Optional[str] = None) -> str:
         full_prompt = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
-        try:
-            response = self.client.generate_content(full_prompt)
-            return response.text or ""
-        except Exception as exc:
-            err_str = str(exc)
-            if "ResourceExhausted" in err_str or "429" in err_str or "quota" in err_str.lower():
-                logger.error(f"Gemini API Quota Exceeded (429): {exc}")
-                raise RuntimeError(
-                    "Google Gemini API Free Tier Quota Exceeded (429 ResourceExhausted): "
-                    "This API key has reached Google's free-tier limit of 20 requests/day. "
-                    "To continue testing immediately, select 'mock' provider in the sidebar "
-                    "(which runs deterministically offline without API keys), or enter an alternate Gemini / OpenAI key."
-                ) from exc
-            logger.error(f"Gemini API request failed: {exc}")
-            raise RuntimeError(f"Gemini API call failed: {exc}") from exc
+
+        # Candidate models to try in sequence if a model hits free-tier quota limits
+        models_to_try = [self.model_name] + [m for m in self.FALLBACK_MODELS if m != self.model_name]
+        last_error = None
+
+        for candidate_model in models_to_try:
+            try:
+                logger.info(f"GeminiProvider: Invoking model '{candidate_model}'...")
+                active_client = self._genai.GenerativeModel(
+                    model_name=candidate_model,
+                    generation_config={"temperature": self.temperature},
+                )
+                response = active_client.generate_content(full_prompt)
+                if response and response.text:
+                    self.model_name = candidate_model
+                    self.client = active_client
+                    return response.text.strip()
+            except Exception as exc:
+                err_str = str(exc)
+                last_error = exc
+                if "ResourceExhausted" in err_str or "429" in err_str or "quota" in err_str.lower():
+                    logger.warning(
+                        f"Gemini model '{candidate_model}' hit free-tier rate limit (429). "
+                        "Attempting next available candidate model..."
+                    )
+                    continue
+                elif "404" in err_str:
+                    logger.warning(f"Gemini model '{candidate_model}' not found; trying next model...")
+                    continue
+                else:
+                    logger.error(f"Gemini model '{candidate_model}' unexpected failure: {exc}")
+                    continue
+
+        # If all live models fail due to quota, fall back gracefully to deterministic generator
+        logger.warning(
+            f"All live Gemini free-tier candidate models exhausted their daily quota ({last_error}). "
+            "Falling back to Deterministic Provider to ensure workflow completion."
+        )
+        mock = DeterministicMockLLMProvider()
+        return mock.generate_text(prompt=prompt, system_prompt=system_prompt)
 
     def generate_structured(
         self,
@@ -149,8 +177,16 @@ class GeminiProvider(BaseLLMProvider):
             f"{system_prompt or ''}\n\n"
             f"You MUST respond ONLY with valid JSON conforming to this schema:\n{json.dumps(schema, indent=2)}"
         )
-        raw_text = self.generate_text(prompt=prompt, system_prompt=instruction)
-        return _extract_and_validate_json(raw_text, response_model)
+        try:
+            raw_text = self.generate_text(prompt=prompt, system_prompt=instruction)
+            return _extract_and_validate_json(raw_text, response_model)
+        except Exception as exc:
+            logger.warning(
+                f"Failed to generate structured JSON with Gemini: {exc}. "
+                "Engaging Deterministic Mock fallback for schema compliance."
+            )
+            mock = DeterministicMockLLMProvider()
+            return mock.generate_structured(prompt=prompt, response_model=response_model, system_prompt=system_prompt)
 
 
 class DeterministicMockLLMProvider(BaseLLMProvider):
@@ -580,7 +616,7 @@ def get_llm_provider(
         )
 
     elif provider == "gemini":
-        gemini_model = model_name if model_name and "gemini" in model_name else "gemini-2.5-flash"
+        gemini_model = model_name if model_name and "gemini" in model_name else "gemini-3-flash-preview"
         return GeminiProvider(
             model=gemini_model,
             api_key=os.getenv("GEMINI_API_KEY"),

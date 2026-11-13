@@ -123,7 +123,7 @@ def get_configured_service(provider_type: str, model_name: str, api_key: str, er
     elif provider_type == "gemini":
         provider = GeminiProvider(
             api_key=api_key or os.getenv("GEMINI_API_KEY"),
-            model=model_name or "gemini-2.5-flash",
+            model=model_name or "gemini-3-flash-preview",
         )
     elif provider_type == "groq":
         provider = OpenAICompatibleProvider(
@@ -169,7 +169,7 @@ with st.sidebar:
     api_key_input = ""
     model_input = ""
     if provider_option != "mock":
-        default_model = "gemini-2.5-flash" if provider_option == "gemini" else "gpt-4o-mini"
+        default_model = "gemini-3-flash-preview" if provider_option == "gemini" else "gpt-4o-mini"
         if provider_option == "groq":
             default_model = "llama-3.3-70b-versatile"
         elif provider_option == "ollama":
