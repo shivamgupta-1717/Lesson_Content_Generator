@@ -122,8 +122,21 @@ class GeminiProvider(BaseLLMProvider):
 
     def generate_text(self, prompt: str, system_prompt: Optional[str] = None) -> str:
         full_prompt = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
-        response = self.client.generate_content(full_prompt)
-        return response.text or ""
+        try:
+            response = self.client.generate_content(full_prompt)
+            return response.text or ""
+        except Exception as exc:
+            err_str = str(exc)
+            if "ResourceExhausted" in err_str or "429" in err_str or "quota" in err_str.lower():
+                logger.error(f"Gemini API Quota Exceeded (429): {exc}")
+                raise RuntimeError(
+                    "Google Gemini API Free Tier Quota Exceeded (429 ResourceExhausted): "
+                    "This API key has reached Google's free-tier limit of 20 requests/day. "
+                    "To continue testing immediately, select 'mock' provider in the sidebar "
+                    "(which runs deterministically offline without API keys), or enter an alternate Gemini / OpenAI key."
+                ) from exc
+            logger.error(f"Gemini API request failed: {exc}")
+            raise RuntimeError(f"Gemini API call failed: {exc}") from exc
 
     def generate_structured(
         self,

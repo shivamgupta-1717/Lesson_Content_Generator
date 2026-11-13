@@ -308,7 +308,16 @@ with tab_studio:
                 st.success("Workflow completed successfully!")
         except Exception as exc:
             st.session_state.run_in_progress = False
-            st.error(f"Workflow execution failed: {exc}")
+            err_msg = str(exc)
+            if "ResourceExhausted" in err_msg or "Quota Exceeded" in err_msg or "429" in err_msg:
+                st.error(f"⚠️ **API Quota Exceeded (429):** {err_msg}")
+                st.info(
+                    "💡 **How to proceed right now:** In the left sidebar under **1. LLM Provider**, "
+                    "switch to **'mock'**. The mock provider generates the complete, rich 18-section RAG lesson "
+                    "and performs the full evaluation without requiring external API quota!"
+                )
+            else:
+                st.error(f"Workflow execution failed: {exc}")
 
     # Display Current State Metrics
     state = st.session_state.workflow_state
