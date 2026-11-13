@@ -354,9 +354,3 @@ git remote add origin https://github.com/shivamgupta-1717/Lesson_Content_Generat
 git branch -M main
 git push -u origin main
 ```
-
----
-
-## 13. Video Demonstration Guide
-
-For a step-by-step breakdown of how to present this project in a 15–20 minute video review or technical interview, see [`docs/video_demo_script.md`](docs/video_demo_script.md).
