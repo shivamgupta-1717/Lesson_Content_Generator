@@ -1,0 +1,18 @@
+[
+  {
+    "attempt_number": 1,
+    "lesson_version_summary": "Version #1: Understanding RAG (Retrieval-Augmented Generation): The Smart Open-Book AI",
+    "failed_checkpoints": [
+      "CHK_ACC_01 (Factual Accuracy of Core Concepts)"
+    ],
+    "failure_reasons": [
+      "Embeddings are incorrectly defined as passwords that do not capture meaning."
+    ],
+    "evaluator_evidence": [
+      "Embeddings are secret passwords that encrypt text so nobody can read it. Embeddings do not capture any meaning at all..."
+    ],
+    "feedback_sent_to_generator": "CRITICAL: The previous lesson failed the strict evaluation rubric on the following checkpoints.\nYou MUST specifically revise and address these exact shortcomings without weakening other sections:\n\n- Checkpoint [CHK_ACC_01] 'Factual Accuracy of Core Concepts' (Dimension: A. Accuracy and Grounding):\n  * Failure Reason: Embeddings are incorrectly defined as passwords that do not capture meaning.\n  * Evaluator Evidence: \"Embeddings are secret passwords that encrypt text so nobody can read it. Embeddings do not capture any meaning at all...\"\n  * Required Action: Explain embeddings accurately as numerical representations that capture semantic meaning and conceptual similarity.\n",
+    "changes_made_during_regeneration": "Regenerating to specifically resolve: CHK_ACC_01",
+    "final_evaluation_result": "FAIL"
+  }
+]
