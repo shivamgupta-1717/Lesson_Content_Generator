@@ -4,8 +4,8 @@ Built with Pydantic v2 for robust validation, serialization, and typing integrit
 """
 
 from enum import Enum
-from typing import Dict, List, Optional
-from pydantic import BaseModel, Field
+from typing import Any, Dict, List, Optional
+from pydantic import BaseModel, Field, field_validator
 
 
 class EvaluationStatus(str, Enum):
@@ -55,7 +55,7 @@ class LessonContent(BaseModel):
     )
     advantages_and_limitations: str = Field(..., description="Benefits and boundary limitations")
     summary: str = Field(..., description="Wrap-up recap of core concepts")
-    knowledge_check_questions: List[Dict[str, str]] = Field(
+    knowledge_check_questions: List[Dict[str, Any]] = Field(
         default_factory=list,
         description="Questions with explanations and correct answers"
     )
@@ -108,8 +108,16 @@ class LessonContent(BaseModel):
             q = qa.get("question", "")
             a = qa.get("answer", "")
             exp = qa.get("explanation", "")
+            options = qa.get("options")
             md_lines.append(f"**Q{i}: {q}**")
-            md_lines.append(f"- *Answer:* {a}")
+            if isinstance(options, dict):
+                for opt_k, opt_v in options.items():
+                    md_lines.append(f"- ({opt_k}) {opt_v}")
+            elif isinstance(options, list):
+                for opt in options:
+                    md_lines.append(f"- {opt}")
+            if a:
+                md_lines.append(f"- *Answer:* {a}")
             if exp:
                 md_lines.append(f"- *Why:* {exp}")
             md_lines.append("")
@@ -131,6 +139,36 @@ class CheckpointResult(BaseModel):
         description="Actionable guidance to fix the checkpoint if status is FAIL"
     )
 
+    @field_validator("status", mode="before")
+    @classmethod
+    def normalize_status(cls, v: Any) -> str:
+        if isinstance(v, str):
+            v_upper = v.strip().upper()
+            if "PASS" in v_upper:
+                return "PASS"
+            if "FAIL" in v_upper:
+                return "FAIL"
+        return v
+
+    @field_validator("dimension", mode="before")
+    @classmethod
+    def normalize_dimension(cls, v: Any) -> str:
+        if isinstance(v, str):
+            v_upper = v.upper()
+            if "ACCURACY" in v_upper or "GROUNDING" in v_upper:
+                return RubricDimension.ACCURACY_AND_GROUNDING.value
+            if "BEGINNER" in v_upper or "LANGUAGE" in v_upper:
+                return RubricDimension.BEGINNER_FRIENDLY_LANGUAGE.value
+            if "EXAMPLE" in v_upper:
+                return RubricDimension.TEACHING_THROUGH_EXAMPLES.value
+            if "JARGON" in v_upper or "CLARITY" in v_upper:
+                return RubricDimension.CLARITY_AND_JARGON.value
+            if "COVERAGE" in v_upper:
+                return RubricDimension.TOPIC_COVERAGE.value
+            if "FLOW" in v_upper:
+                return RubricDimension.TEACHING_FLOW.value
+        return v
+
 
 class EvaluationReport(BaseModel):
     """Comprehensive evaluation report aggregated across all checkpoints."""
@@ -148,6 +186,13 @@ class EvaluationReport(BaseModel):
         description="List of individual checkpoint evaluations"
     )
     summary_verdict: str = Field(..., description="High-level narrative verdict")
+
+    @field_validator("is_passed", mode="before")
+    @classmethod
+    def normalize_is_passed(cls, v: Any) -> bool:
+        if isinstance(v, str):
+            return v.strip().lower() in ("true", "pass", "passed", "1")
+        return bool(v)
 
     def get_failed_checkpoints(self) -> List[CheckpointResult]:
         """Returns all checkpoints that resulted in FAIL."""

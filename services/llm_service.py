@@ -9,8 +9,11 @@ import json
 import os
 import re
 from typing import Any, Dict, Optional, Type, TypeVar
+from dotenv import load_dotenv
 from pydantic import BaseModel
 from utils.logger import logger
+
+load_dotenv()
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -97,7 +100,7 @@ class GeminiProvider(BaseLLMProvider):
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model: str = "gemini-1.5-flash",
+        model: str = "gemini-2.5-flash",
         temperature: float = 0.3,
     ):
         try:
@@ -564,8 +567,9 @@ def get_llm_provider(
         )
 
     elif provider == "gemini":
+        gemini_model = model_name if model_name and "gemini" in model_name else "gemini-2.5-flash"
         return GeminiProvider(
-            model=model_name,
+            model=gemini_model,
             api_key=os.getenv("GEMINI_API_KEY"),
         )
 

@@ -123,7 +123,7 @@ def get_configured_service(provider_type: str, model_name: str, api_key: str, er
     elif provider_type == "gemini":
         provider = GeminiProvider(
             api_key=api_key or os.getenv("GEMINI_API_KEY"),
-            model=model_name or "gemini-1.5-flash",
+            model=model_name or "gemini-2.5-flash",
         )
     elif provider_type == "groq":
         provider = OpenAICompatibleProvider(
@@ -152,20 +152,24 @@ with st.sidebar:
     st.caption("GenAI Engineer Take-Home Assignment")
 
     st.subheader("1. LLM Provider")
+    env_provider = os.getenv("LLM_PROVIDER", "gemini").lower()
+    provider_options = ["gemini", "openai", "groq", "ollama", "mock"]
+    default_idx = provider_options.index(env_provider) if env_provider in provider_options else 0
+
     provider_option = st.selectbox(
         "Select Provider",
-        options=["mock", "openai", "gemini", "groq", "ollama"],
-        index=0,
+        options=provider_options,
+        index=default_idx,
         help=(
-            "Use 'mock' for 100% deterministic, instant, zero-key testing and offline demo. "
-            "Select 'openai' or 'gemini' to execute with real foundation models."
+            "Configured with your active Gemini API key. "
+            "Use 'mock' for instant deterministic testing, or 'gemini' / 'openai' for live foundation models."
         ),
     )
 
     api_key_input = ""
     model_input = ""
     if provider_option != "mock":
-        default_model = "gpt-4o-mini" if provider_option == "openai" else "gemini-1.5-flash"
+        default_model = "gemini-2.5-flash" if provider_option == "gemini" else "gpt-4o-mini"
         if provider_option == "groq":
             default_model = "llama-3.3-70b-versatile"
         elif provider_option == "ollama":
